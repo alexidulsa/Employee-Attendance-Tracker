@@ -1,0 +1,164 @@
+@page "/login"
+@inject IESapp.Services.AppState AppState
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.SupabaseService SupabaseService
+@inject NavigationManager NavManager
+
+<div class="login-container">
+    <div class="login-card" style="background-color: rgba(255, 255, 255, 0.80);">
+        <h1 class="login-title">IES Time Tracker</h1>
+        
+        @if (!showAdminPanel)
+        {
+            <h2 class="login-subtitle">Welcome</h2>
+            <p class="login-description">Sign in to continue</p>
+            
+            @if (!string.IsNullOrEmpty(loginError))
+            {
+                <div class="alert alert-danger mt-2" style="font-size: 0.85rem; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px;">
+                    ⚠️ @loginError
+                </div>
+            }
+
+            @if (isGoogleLoading)
+            {
+                <div style="text-align:center; padding: 18px 0; color: #aaa; font-size: 0.9rem;">
+                    <div class="popup-spinner" style="margin: 0 auto 10px;"></div>
+                    Waiting for Google sign-in...
+                    <br/>
+                    <small style="opacity:0.6;">Complete sign-in in your browser, then return here.</small>
+                </div>
+            }
+            else
+            {
+                <button class="btn-secondary google-btn" @onclick="HandleGoogleLogin">
+                    <img src="/images/icons/icons8-google-48.png" alt="Google Logo" class="google-icon" />
+                    Continue with Google
+                </button>
+            }
+
+            <button class="btn-admin-toggle" @onclick="() => { showAdminPanel = true; loginError = null; }" disabled="@isGoogleLoading">
+                🔐 Admin Login
+            </button>
+        }
+        else
+        {
+            <h2 class="login-subtitle">Admin Login</h2>
+            <p class="login-description">Enter your admin credentials</p>
+
+            <div class="input-group">
+                <input type="text" @bind="adminUser" placeholder="Username" class="login-input" />
+            </div>
+            <div class="input-group" style="margin-top: 10px;">
+                <input type="password" @bind="adminPassword" placeholder="Password" class="login-input" />
+            </div>
+
+            @if (!string.IsNullOrEmpty(loginError))
+            {
+                <div class="alert alert-danger mt-2" style="font-size: 0.85rem; padding: 8px 12px; border-radius: 6px;">
+                    ⚠️ @loginError
+                </div>
+            }
+
+            <button class="btn-primary login-btn" @onclick="HandleAdminLogin" disabled="@isLoggingIn">
+                @(isLoggingIn ? "Checking..." : "Login")
+            </button>
+
+            <button class="btn-admin-toggle" style="margin-top: 8px;" @onclick="() => { showAdminPanel = false; loginError = null; }">
+                ← Back
+            </button>
+        }
+
+        <p class="terms-text" style="font-size: 0.7rem; margin-top: 20px;">
+            By clicking continue, you agree to our Terms of Service and Privacy Policy
+        </p>
+
+        <p class="terms-text" style="font-size: 0.7rem; margin-top: 10px; margin-bottom: 10px;">
+            <img src="images/icons/IESlogo.png" style="width: 32px; height: 32px; object-fit: contain; border: 1px solid black;" />
+            <a href="https://idulsa-surveying.com/" target="_blank" style="text-decoration: none; color: black; font-size: 0.83rem; margin-left: 10px;" title="idulsa-surveying.com">
+                Idulsa Engineering Services
+            </a>
+        </p>
+    </div>
+</div>
+
+@code {
+    // Admin panel
+    private bool showAdminPanel = false;
+    private string adminUser = "";
+    private string adminPassword = "";
+    private string? loginError = null;
+    private bool isLoggingIn = false;
+
+    // Google OAuth
+    private bool isGoogleLoading = false;
+
+    private async Task HandleGoogleLogin()
+    {
+        isGoogleLoading = true;
+        loginError = null;
+        StateHasChanged();
+
+        try
+        {
+            var email = await SupabaseService.SignInWithGoogleAsync();
+            if (!string.IsNullOrEmpty(email))
+            {
+                AppState.Login(email);
+                NavManager.NavigateTo("/");
+            }
+            else
+            {
+                loginError = "Google sign-in failed or timed out. Please try again.";
+            }
+        }
+        catch (Exception ex)
+        {
+            loginError = $"Sign-in error: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Login.HandleGoogleLogin] {ex.Message}");
+        }
+        finally
+        {
+            isGoogleLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleAdminLogin()
+    {
+        if (string.IsNullOrWhiteSpace(adminUser) || string.IsNullOrWhiteSpace(adminPassword))
+        {
+            loginError = "Username and password cannot be empty.";
+            return;
+        }
+
+        isLoggingIn = true;
+        loginError = null;
+        try
+        {
+            var accounts = await SheetsService.GetAccountsAsync();
+            var match = accounts.Any(a =>
+                string.Equals(a.username, adminUser, StringComparison.OrdinalIgnoreCase) &&
+                a.password == adminPassword);
+
+            if (match)
+            {
+                AppState.Login(adminUser, isAdmin: true);
+                NavManager.NavigateTo("/");
+            }
+            else
+            {
+                loginError = "Invalid username or password.";
+            }
+        }
+        catch (Exception ex)
+        {
+            loginError = $"Login error: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Login.HandleAdminLogin] {ex.Message}");
+        }
+        finally
+        {
+            isLoggingIn = false;
+        }
+    }
+}

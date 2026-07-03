@@ -1,0 +1,44 @@
+# Tech Stack
+- Frontend framework is .NET MAUI + Blazor App
+- Backend is google sheets
+- Already has .NET MAUI + Blazor App template no need to regenerate just reuse the current files
+- The App Signs-in or Signs-up using google account, can you link it to google? 
+
+# General Instructions
+- Code for desktop application that runs on windows
+- Code in human readable syntax i.e. use variables names that makes sense based on its usage
+- Text style for all user interface is Roboto, Arial 
+- Ask me for needed API keys or authentication request
+- The App will contain 3 Main Dashboards
+- UI design is at file: UI_Design/IESTimeTracker_design.pdf & AddEmployee_PopUp.png
+- Follow UI design in the PDF which will contain a description for info about the functionality of the Widgets etc.., do not put the description texts in the UI it is just for your info
+- Image sources will contain at Images folder
+- You May interrupt me whenever you need additional info for the implementation or when there is ambiguity
+
+# Database Google Sheets
+- google cloud service account JSON is at file: iesemployeetimetrackerapp-356049cc6bec.json
+- the excel file will contain 2 Sheets (EmployeeInfo, Daily_TimeLog)
+- See sample xlsx database structure that i want in file: IESTimeTracker_Database_Sample.xlsx
+
+# (Google Sheet Database) Employee Info Sheet
+ID -> (4 digit hexadecimal, generated unique identifier)
+Name
+Age
+Sex
+Address
+Job Position
+Salary
+
+# (Google Sheet Database) Daily_TimeLog Sheet
+ID
+Name
+Time-in
+Time-out
+Status -> 3 States for employee current status: Not Started (No time-in Data), On Duty (Has Time-in, But no Time-out), Shift Done (When both time-in and time-out data is established for the day)	
+Total Hrs -> Time-out subtracted to Time-in in 24hrs format calculated after both time-in and time-out data is established for the day
+
+
+# UI Header with log time button
+- When log time button is clicked
+shows employee dropdown to choose (drop down can choose multiple employee to log time at the same time), Log time button adapts to become a time-in or time-out depending if the employee has not yet time in for the day then time-in or already has time-in for the day then time-out. Then reverts back to initial log time button after clicking the time-in or time-out. Will Store to google sheets database after clicking may it be time-in or time-out, alerts error when input time is empty and will not store
+

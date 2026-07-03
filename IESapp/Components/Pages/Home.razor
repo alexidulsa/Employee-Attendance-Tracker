@@ -1,0 +1,293 @@
+@page "/"
+@implements IDisposable
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.AppState AppState
+
+<div class="dashboard-grid">
+    <div class="dashboard-card time-logs-card">
+        <div class="activity-header d-flex justify-content-between align-items-center mb-3">
+            <h3 class="m-0 fw-bold">Employee List</h3>
+            <span class="fw-bold fs-5">@DateTime.Now.ToString("MMM d, yyyy")</span>
+        </div>
+        
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="alert alert-danger">
+                <strong>Error connecting to Google Sheets:</strong> @errorMessage
+                <br/><small>Please ensure your Spreadsheet ID is correct and the bot email has Editor access.</small>
+            </div>
+        }
+        else if (isLoading)
+        {
+            <p>Loading activity logs...</p>
+        }
+        else if (!employees.Any())
+        {
+            <p>No employees found.</p>
+        }
+        else
+        {
+            <div class="activity-list-container">
+                <div class="row text-center fw-bold mb-3 border-bottom pb-2">
+                    <div class="col-4"></div>
+                    <div class="col-4">Time-in</div>
+                    <div class="col-4">Time-out</div>
+                </div>
+
+                <div class="scrollable-list">
+                    @foreach (var emp in employees)
+                    {
+                        var log = timeLogs.FirstOrDefault(l => l.EmployeeId == emp.Id && (l.Status == "On Duty" || l.Status == "Shift Done"));
+                        var timeIn = log?.TimeIn ?? "";
+                        var timeOut = log?.TimeOut ?? "";
+                        if (log?.Status == "On Duty") { timeOut = "ON DUTY"; }
+
+                        <div class="row align-items-center text-center py-3 border-bottom emp-row">
+                            <div class="col-4 d-flex flex-column align-items-center">
+                                <img src="images/icons/user-profile-avatar-svgrepo-com.svg" class="emp-avatar-icon mb-1" style="width: 50px; height: 50px;" />
+                                <span class="fw-bold">@emp.Name</span>
+                            </div>
+                            <div class="col-4 fw-bold fs-5">
+                                @(string.IsNullOrEmpty(timeIn) ? "-" : FormatTime(timeIn))
+                            </div>
+                            <div class="col-4 fw-bold fs-5 @(timeOut == "ON DUTY" ? "text-success" : "")">
+                                @(string.IsNullOrEmpty(timeOut) ? "-" : (timeOut == "ON DUTY" ? timeOut : FormatTime(timeOut)))
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="dashboard-card weather-card">
+        <h3>Current Weather</h3>
+        <p class="weather-location">@locationName</p>
+        
+        @if (weatherLoading)
+        {
+            <div class="weather-widget">
+                <div class="weather-temp">--°C</div>
+                <div class="weather-desc">Loading...</div>
+            </div>
+        }
+        else if (weatherError)
+        {
+            <div class="weather-widget" style="background: linear-gradient(135deg, #9e9e9e, #616161);">
+                <div class="weather-temp">--°C</div>
+                <div class="weather-desc">Unavailable</div>
+            </div>
+        }
+        else
+        {
+            <div class="weather-widget" style="background: @GetWeatherGradient()">
+                <div class="weather-temp">@weatherTemp°C</div>
+                <div class="weather-desc">@weatherDesc</div>
+                <div style="font-size: 0.8rem; margin-top: 6px; opacity: 0.8;">💨 @weatherWindSpeed km/h wind</div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private List<IESapp.Models.Employee> employees = new();
+    private List<IESapp.Models.TimeLog> timeLogs = new();
+    private bool isLoading = true;
+    private string errorMessage = "";
+
+    // Weather state
+    private bool weatherLoading = true;
+    private bool weatherError = false;
+    private double weatherTemp = 0;
+    private string weatherDesc = "";
+    private double weatherWindSpeed = 0;
+    private int weatherCode = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AppState.OnTimeLogsUpdated += ReLoadData;
+        // Get GPS Location + Data in parallel, Then Load Weather
+        //await Task.WhenAll(LoadData(), GetDeviceLocationAsync());
+        await LoadData();
+        await GetDeviceLocationAsync();
+        await LoadWeather();
+    }
+
+    private async void ReLoadData()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadData();
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadData()
+    {
+        isLoading = true;
+        errorMessage = "";
+        try 
+        {
+            employees = await SheetsService.GetEmployeesAsync();
+            timeLogs = await SheetsService.GetTimeLogsAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Home.LoadData] {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    // ── Location (GPS + reverse geocoding) ───────────────────────────────
+    // Fallback coordinates: Villanueva, Misamis Oriental, Philippines
+    private double _lat = 8.5766;
+    private double _lon = 124.7358;
+    private string locationName = "Villanueva City, Misamis Oriental, Philippines";
+
+    private async Task GetDeviceLocationAsync()
+    {
+        try
+        {
+            // Check / request permission first — silently bail if denied (no exception)
+            var status = await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>();
+            if (status != PermissionStatus.Granted)
+                status = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
+            if (status != PermissionStatus.Granted)
+                return; // user denied — keep hardcoded fallback, no error
+
+            var request = new Microsoft.Maui.Devices.Sensors.GeolocationRequest(
+                Microsoft.Maui.Devices.Sensors.GeolocationAccuracy.Low,
+                TimeSpan.FromSeconds(5));
+            var loc = await Microsoft.Maui.Devices.Sensors.Geolocation.Default.GetLocationAsync(request);
+            if (loc != null)
+            {
+                _lat = loc.Latitude;
+                _lon = loc.Longitude;
+                // Reverse-geocode using Nominatim (OpenStreetMap) — no API key required
+                await ResolveLocationNameAsync(_lat, _lon);
+            }
+        }
+        catch (Exception ex)
+        {
+            // GPS unavailable or any unexpected error — keep fallback values silently
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Home.GetDeviceLocationAsync] {ex.Message}");
+        }
+        StateHasChanged(); // update location text even before weather arrives
+    }
+
+    /// <summary>
+    /// Reverse-geocode lat/lon via Nominatim (OpenStreetMap).
+    /// Free, no API key needed. Silently ignores any failure.
+    /// </summary>
+    private async Task ResolveLocationNameAsync(double lat, double lon)
+    {
+        try
+        {
+            using var http = new System.Net.Http.HttpClient();
+            // Nominatim requires a User-Agent header
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("IESapp/1.0 (iesapp@local)");
+            var url = $"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json";
+            var json = await http.GetStringAsync(url);
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("address", out var addr))
+            {
+                // city > town > village > county as the primary label
+                var city = addr.TryGetProperty("city",    out var c) ? c.GetString() :
+                           addr.TryGetProperty("town",    out var t) ? t.GetString() :
+                           addr.TryGetProperty("village", out var v) ? v.GetString() :
+                           addr.TryGetProperty("county",  out var co) ? co.GetString() : "";
+
+                var province = addr.TryGetProperty("county",  out var prov) ? prov.GetString() ?? ""
+                             : addr.TryGetProperty("state",   out var st)   ? st.GetString()   ?? "" : "";
+
+                var country = addr.TryGetProperty("country", out var ctry) ? ctry.GetString() ?? "" : "";
+
+                var resolved = string.Join(", ",
+                    new[] { city, province, country }.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+                if (!string.IsNullOrWhiteSpace(resolved))
+                    locationName = resolved;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Network error or parse failure — keep fallback locationName silently
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Home.ResolveLocationNameAsync] {ex.Message}");
+        }
+    }
+
+    private async Task LoadWeather()
+    {
+        weatherLoading = true;
+        weatherError = false;
+        try
+        {
+            using var http = new System.Net.Http.HttpClient();
+            var url = $"https://api.open-meteo.com/v1/forecast?latitude={_lat}&longitude={_lon}&current_weather=true&timezone=Asia%2FManila";
+            var json = await http.GetStringAsync(url);
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var cw = doc.RootElement.GetProperty("current_weather");
+            weatherTemp = cw.GetProperty("temperature").GetDouble();
+            weatherWindSpeed = cw.GetProperty("windspeed").GetDouble();
+            weatherCode = cw.GetProperty("weathercode").GetInt32();
+            weatherDesc = GetWeatherDescription(weatherCode);
+        }
+        catch (Exception ex)
+        {
+            weatherError = true;
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Home.LoadWeather] {ex.Message}");
+        }
+        finally
+        {
+            weatherLoading = false;
+        }
+        StateHasChanged();
+    }
+
+    private string GetWeatherDescription(int code) => code switch
+    {
+        0 => "Clear Sky ☀️",
+        1 => "Mainly Clear 🌤️",
+        2 => "Partly Cloudy ⛅",
+        3 => "Overcast ☁️",
+        45 or 48 => "Foggy 🌫️",
+        51 or 53 or 55 => "Drizzle 🌦️",
+        61 or 63 or 65 => "Rainy 🌧️",
+        71 or 73 or 75 => "Snowy 🌨️",
+        80 or 81 or 82 => "Rain Showers 🌦️",
+        95 => "Thunderstorm ⛈️",
+        96 or 99 => "Heavy Thunderstorm ⛈️",
+        _ => "Variable 🌡️"
+    };
+
+    private string GetWeatherGradient() => weatherCode switch
+    {
+        0 or 1 => "linear-gradient(135deg, #f9a825, #f57f17)",
+        2 or 3 => "linear-gradient(135deg, #78909c, #546e7a)",
+        45 or 48 => "linear-gradient(135deg, #90a4ae, #607d8b)",
+        51 or 53 or 55 or 61 or 63 or 65 or 80 or 81 or 82 => "linear-gradient(135deg, #42a5f5, #1565c0)",
+        95 or 96 or 99 => "linear-gradient(135deg, #37474f, #212121)",
+        _ => "linear-gradient(135deg, #4fc3f7, #0288d1)"
+    };
+
+    private string FormatTime(string hhmm)
+    {
+        if (TimeSpan.TryParse(hhmm, out TimeSpan ts))
+        {
+            var dt = DateTime.Today.Add(ts);
+            return dt.ToString("h:mm tt"); // e.g. 8:30 AM
+        }
+        return hhmm;
+    }
+
+    public void Dispose()
+    {
+        AppState.OnTimeLogsUpdated -= ReLoadData;
+    }
+}

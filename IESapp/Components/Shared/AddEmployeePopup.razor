@@ -1,0 +1,195 @@
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.AppState AppState
+@inject IESapp.Services.SupabaseService SupabaseService
+
+@if (IsVisible)
+{
+    <div class="popup-overlay" @onclick="async () => { if (!isSaving) await Close(); }">
+        <div class="popup-content" @onclick:stopPropagation="true" style="position: relative;">
+
+            @if (isSaving)
+            {
+                <div class="popup-loading-overlay">
+                    <div class="popup-spinner"></div>
+                    <p class="popup-loading-text">Saving employee to database...</p>
+                </div>
+            }
+
+            <div class="popup-header">
+                <h3>Add Employee</h3>
+                <button class="close-btn" @onclick="Close" disabled="@isSaving">×</button>
+            </div>
+            
+            <div class="popup-body" style="pointer-events: @(isSaving ? "none" : "auto"); opacity: @(isSaving ? "0.4" : "1");">
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">IES ID</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" placeholder="e.g. 1001" @bind="newEmployee.IesId" />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Name</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" placeholder="Input" @bind="newEmployee.Name" />
+                    </div>
+                </div>
+                
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Birthday</label>
+                    <div class="col-sm-8">
+                        <input type="date" class="form-control" @bind="birthdayInput" max="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                        @if (newEmployee.Birthday != DateOnly.MinValue)
+                        {
+                            <small class="text-muted">Age: @newEmployee.Age years old</small>
+                        }
+                    </div>
+                </div>
+                
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Sex</label>
+                    <div class="col-sm-8">
+                        <select class="form-control" @bind="newEmployee.Sex">
+                            <option value="" style="font-weight: 100; opacity: 0.1;">Select Gender</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Job Position</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" placeholder="Input" @bind="newEmployee.JobPosition" />
+                    </div>
+                </div>
+                
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Daily Wage</label>
+                    <div class="col-sm-8">
+                        <input type="number" class="form-control" placeholder="Input" @bind="newEmployee.DailyWage" />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Address</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" placeholder="Input" @bind="newEmployee.Address" />
+                    </div>
+                </div>
+            </div>
+            
+            <div class="popup-footer">
+                @if (string.IsNullOrEmpty(errorMessage))
+                    {
+                        <p class="description-text">
+                            For Adding Employee then store new info to google sheet database.
+                            Alerts error when Name and Job Position is empty and will not store
+                        </p>
+                    } else {
+
+                    }
+                <div class="footer-actions">
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <span class="error-msg" style="color: red; font-size: 0.87rem; margin-right: 10px;">@errorMessage</span>
+                    }
+                    <button class="btn btn-secondary add-emp-btn" style="white-space: nowrap;" @onclick="SaveEmployee">
+                        ADD EMPLOYEE
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public bool IsVisible { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> IsVisibleChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnEmployeeAdded { get; set; }
+
+    private IESapp.Models.Employee newEmployee = new();
+    private string? errorMessage;
+    private bool isSaving = false;
+
+    // Birthday binds to a DateTime? for the date input, then converts to DateOnly
+    private DateTime? birthdayInput
+    {
+        get => newEmployee.Birthday == DateOnly.MinValue ? null : newEmployee.Birthday.ToDateTime(TimeOnly.MinValue);
+        set
+        {
+            newEmployee.Birthday = value.HasValue
+                ? DateOnly.FromDateTime(value.Value)
+                : DateOnly.MinValue;
+        }
+    }
+
+    private async Task Close()
+    {
+        IsVisible = false;
+        await IsVisibleChanged.InvokeAsync(IsVisible);
+        newEmployee = new();
+        errorMessage = null;
+    }
+
+    // Letters, spaces, hyphens, apostrophes only
+    private bool IsValidText(string value) =>
+        System.Text.RegularExpressions.Regex.IsMatch(value.Trim(), @"^[a-zA-Z0-9\s.,\-]+$");
+
+    private async Task SaveEmployee()
+    {
+        // Required field check
+        if (string.IsNullOrWhiteSpace(newEmployee.Name) || string.IsNullOrWhiteSpace(newEmployee.JobPosition))
+        {
+            errorMessage = "Name and Job Position cannot be empty.";
+            return;
+        }
+
+        // Letter-only validation
+        if (!IsValidText(newEmployee.Name))
+        {
+            errorMessage = "Name must contain letters and numbers only (no special characters).";
+            return;
+        }
+        if (!IsValidText(newEmployee.JobPosition))
+        {
+            errorMessage = "Job Position must contain letters and numbers only (no special characters).";
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(newEmployee.Address) && !IsValidText(newEmployee.Address))
+        {
+            errorMessage = "Address must contain letters and numbers only (no special characters).";
+            return;
+        }
+        if (newEmployee.Birthday == DateOnly.MinValue)
+        {
+            errorMessage = "Birthday is required.";
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            // ID is generated inside AddEmployeeAsync (via Supabase for uniqueness)
+            await SheetsService.AddEmployeeAsync(newEmployee, SupabaseService);
+
+            await OnEmployeeAdded.InvokeAsync();
+            AppState.NotifyEmployeesUpdated();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[AddEmployeePopup.SaveEmployee] {ex.Message}");
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}

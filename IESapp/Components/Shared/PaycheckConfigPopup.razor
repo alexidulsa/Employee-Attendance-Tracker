@@ -1,0 +1,78 @@
+@* PaycheckConfigPopup.razor — configure daily_work_hrs (stored via Preferences) *@
+
+@if (IsVisible)
+{
+<div class="popup-overlay" @onclick="Close">
+    <div class="popup-content" @onclick:stopPropagation="true" style="max-width: 380px; width: 100%;">
+        <div class="popup-header">
+            <h5>⚙️ Paycheck Configuration</h5>
+            <button class="btn-close-custom" @onclick="Close">✕</button>
+        </div>
+
+        <div class="popup-body" style="padding: 1.5rem; align-items: left; justify-content: left;">
+            <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 1.2rem;">
+                Set the number of standard working hours per day. This is used to compute
+                <strong>Gross Pay</strong> from Daily Wage and actual hours worked.
+                <br />
+                <br />
+                <small>Gross Pay = ( DailyWage / daily_work_hrs (converted to minutes) ) x total_work_hrs (converted to total minutes)</small>
+            </p>
+
+            <div class="form-group row align-items-center mb-3">
+                <label class="col-sm-6 col-form-label fw-semibold">Daily Work Hours</label>
+                <div class="col-sm-6">
+                    <input type="number" class="form-control text-center" min="0.5" max="24" step="0.5"
+                           @bind="localHours" @bind:event="oninput" style="width: 50%; margin-left: 10px;"/>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMsg))
+            {
+                <div class="alert alert-danger py-1 px-2" style="font-size:0.82rem;">@errorMsg</div>
+            }
+        </div>
+
+        <div class="popup-footer">
+            <button class="btn btn-primary" style="margin-left: 10px;" @onclick="Save">Save</button>
+            <button class="btn btn-secondary" style="margin-left: 10px;" @onclick="Close">Cancel</button>
+        </div>
+    </div>
+</div>
+}
+
+
+@code {
+    [Parameter] public bool IsVisible { get; set; }
+    [Parameter] public EventCallback<bool> IsVisibleChanged { get; set; }
+    [Parameter] public EventCallback<decimal> OnSaved { get; set; }
+
+    private decimal localHours = 8m;
+    private string? errorMsg;
+
+    protected override void OnParametersSet()
+    {
+        if (IsVisible)
+        {
+            localHours = (decimal)Microsoft.Maui.Storage.Preferences.Default.Get("daily_work_hrs", 8f);
+            errorMsg   = null;
+        }
+    }
+
+    private async Task Save()
+    {
+        if (localHours < 0.5m || localHours > 24m)
+        {
+            errorMsg = "Please enter a value between 0.5 and 24 hours.";
+            return;
+        }
+        Microsoft.Maui.Storage.Preferences.Default.Set("daily_work_hrs", (float)localHours);
+        await OnSaved.InvokeAsync(localHours);
+        await Close();
+    }
+
+    private async Task Close()
+    {
+        IsVisible = false;
+        await IsVisibleChanged.InvokeAsync(false);
+    }
+}

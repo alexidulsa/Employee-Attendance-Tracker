@@ -1,0 +1,30 @@
+# Build output - never track these
+bin/
+obj/
+
+# Google Service Account credentials - NEVER commit this!
+**/iesemployeetimetrackerapp.json
+**/*-356049cc6bec.json
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docview
+
+# NuGet packages
+packages/
+*.nupkg
+*.snupkg
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets - never commit these!
+*.json.local
+appsettings.Development.json
+
+# Rider/JetBrains
+.idea/

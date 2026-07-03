@@ -1,0 +1,108 @@
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.AppState AppState
+
+@if (IsVisible)
+{
+    <div class="popup-overlay" @onclick="Close">
+        <div class="popup-content" @onclick:stopPropagation="true">
+            <div class="popup-header">
+                <h3>Remove Employee</h3>
+                <button class="close-btn" @onclick="Close">×</button>
+            </div>
+
+            <div class="popup-body">
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Select Employee</label>
+                    <div class="col-sm-8">
+                        <select class="form-control" @bind="selectedEmployeeId">
+                            <option value="">-- Select Employee --</option>
+                            @foreach (var emp in Employees)
+                            {
+                                <option value="@emp.Id">@emp.Name (@emp.JobPosition)</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(selectedEmployeeId))
+                {
+                    <div class="alert alert-warning mt-3" style="font-size: 0.87rem;">
+                        ⚠️ This will permanently remove the selected employee from the Google sheet
+                    </div>
+                }
+            </div>
+
+            <div class="popup-footer">
+                <p class="description-text">
+                    Select an employee from the list to remove them from the system.
+                    This action will delete their record from the Google Sheet.
+                </p>
+                <div class="footer-actions">
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <span class="error-msg">@errorMessage</span>
+                    }
+                    <button class="btn remove-emp-btn" style="white-space: nowrap;" @onclick="RemoveEmployee" disabled="@(string.IsNullOrEmpty(selectedEmployeeId) || isRemoving)">
+                        @if (isRemoving)
+                        {
+                            <span>Removing...</span>
+                        }
+                        else
+                        {
+                            <span>🗑 REMOVE</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public bool IsVisible { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> IsVisibleChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnEmployeeRemoved { get; set; }
+
+    [Parameter]
+    public List<IESapp.Models.Employee> Employees { get; set; } = new();
+
+    private string selectedEmployeeId = "";
+    private string? errorMessage;
+    private bool isRemoving = false;
+
+    private async Task Close()
+    {
+        IsVisible = false;
+        await IsVisibleChanged.InvokeAsync(IsVisible);
+        selectedEmployeeId = "";
+        errorMessage = null;
+    }
+
+    private async Task RemoveEmployee()
+    {
+        if (string.IsNullOrEmpty(selectedEmployeeId)) return;
+
+        isRemoving = true;
+        errorMessage = null;
+        try
+        {
+            await SheetsService.DeleteEmployeeAsync(selectedEmployeeId);
+            await OnEmployeeRemoved.InvokeAsync();
+            AppState.NotifyEmployeesUpdated();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[RemoveEmployeePopup.RemoveEmployee] {ex.Message}");
+        }
+        finally
+        {
+            isRemoving = false;
+        }
+    }
+}

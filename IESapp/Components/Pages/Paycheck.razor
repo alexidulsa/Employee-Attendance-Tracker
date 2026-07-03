@@ -1,0 +1,351 @@
+@page "/paycheck"
+@implements IDisposable
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.SupabaseService SupabaseService
+@inject IESapp.Services.AppState AppState
+@using ClosedXML.Excel
+
+@* ── Header ─────────────────────────────────────────────────────────────── *@
+<div class="dashboard-header">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <h3>Employee Paycheck</h3>
+        <button class="eye-toggle-btn"
+                disabled="@(!AppState.IsAdmin)"
+                title="@(!AppState.IsAdmin ? "Admin login required" : isHidden ? "Show paycheck data" : "Hide paycheck data")"
+                style="@(!AppState.IsAdmin ? "cursor: not-allowed; opacity: 0.45;" : "")"
+                @onclick="() => { if (AppState.IsAdmin) isHidden = !isHidden; }">
+            @if (isHidden)
+             {
+                <!-- Eye Closed Icon -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" 
+                    fill="currentColor" viewBox="0 0 16 16">
+                    <path d="M13.359 11.238C15.06 9.72 16 8 16 8s-3-5.5-8-5.5a7 7 0 0 0-2.79.588l.77.771A6 6 0 0 1 8 3.5c2.12 0 3.879 
+                    1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 
+                    1.12-1.465 1.755q-.247.248-.517.486z"/>
+                    <path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 
+                    2.829 2.829zm-2.943 1.299.822.822a3.5 3.5 0 0 1-4.474-4.474l.823.823a2.5 
+                    2.5 0 0 0 2.829 2.829"/>
+                    <path d="M3.35 5.47q-.27.24-.518.487A13 13 0 0 0 1.172 8l.195.288c.335.48.83 
+                    1.12 1.465 1.755C4.121 11.332 5.881 12.5 8 12.5c.716 0 1.39-.133 
+                    2.02-.36l.77.772A7 7 0 0 1 8 13.5C3 13.5 0 8 0 8s.939-1.721 
+                    2.641-3.238l.708.709z"/>
+                    <path d="M13.646 14.354l-12-12 .708-.708 12 12z"/>
+                </svg>
+            }
+            else
+            {
+                <!-- Eye Open Icon -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" 
+                    fill="currentColor" viewBox="0 0 16 16">
+                    <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 
+                    8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 
+                    5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 
+                    1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 
+                    13 0 0 1 1.172 8z"/>
+                    <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0"/>
+                </svg>
+            }
+        </button>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px;">
+        @* Date pickers *@
+        <div style="display:flex; align-items:center; gap:6px;">
+            <div class="date-picker-wrap @(!AppState.IsAdmin ? "disabled-control" : "")"
+                 title="@(!AppState.IsAdmin ? "Admin login required" : "")">
+                <span class="date-icon">📅</span>
+                <input type="date" class="date-input"
+                       disabled="@(!AppState.IsAdmin)"
+                       @bind="dateFrom" @bind:event="onchange" @bind:after="LoadPaycheckData" />
+            </div>
+            <span style="color: var(--text-muted);">–</span>
+            <div class="date-picker-wrap @(!AppState.IsAdmin ? "disabled-control" : "")"
+                 title="@(!AppState.IsAdmin ? "Admin login required" : "")">
+                <span class="date-icon">📅</span>
+                <input type="date" class="date-input"
+                       disabled="@(!AppState.IsAdmin)"
+                       @bind="dateTo" @bind:event="onchange" @bind:after="LoadPaycheckData" />
+            </div>
+        </div>
+
+        @* Config button *@
+        <button class="btn-icon-circle"
+                disabled="@(!AppState.IsAdmin)"
+                title="@(!AppState.IsAdmin ? "Admin login required" : "Configure daily work hours")"
+                style="@(!AppState.IsAdmin ? "cursor: not-allowed; opacity: 0.45;" : "")"
+                @onclick="() => { if (AppState.IsAdmin) showConfig = true; }">
+            ⚙️
+        </button>
+
+        @* Export to Excel button *@
+        <button class="btn btn-success btn-sm"
+                disabled="@(paycheckRows.Count == 0 || paycheckRows.Any(r => r.IsLoading) || isExporting || !AppState.IsAdmin)"
+                title="@(!AppState.IsAdmin ? "Admin login required" : "Export currently displayed paycheck to Excel")"
+                style="@(!AppState.IsAdmin ? "cursor: not-allowed; opacity: 0.45;" : "")"
+                @onclick="ExportToExcelAsync">
+            @if (isExporting) { <span>Exporting…</span> } else { <span>📥 Export Excel</span> }
+        </button>
+    </div>
+</div>
+
+@* ── Alerts ──────────────────────────────────────────────────────────────── *@
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger">
+        <strong>Error:</strong> @errorMessage
+    </div>
+}
+
+@* ── Table ───────────────────────────────────────────────────────────────── *@
+@if (isLoading)
+{
+    <div class="dashboard-card">
+        <p style="color: var(--text-muted);">Loading paycheck data...</p>
+    </div>
+}
+else
+{
+    <div class="dashboard-card pt-0">
+        <div class="table-responsive">
+            <table class="table modern-table">
+                <thead>
+                    <tr>
+                        <th>GUID</th>
+                        <th>IES_ID</th>
+                        <th>Name</th>
+                        <th>Age</th>
+                        <th>Job Position</th>
+                        <th>Daily Wage</th>
+                        <th>Total Work Hrs</th>
+                        <th>Gross Pay</th>
+                    </tr>
+                </thead>
+                <tbody style="opacity: @(isHidden ? "0.010" : "1"); background-color: @(isHidden ? "#f8f9fa6c" : "#fff"); transition: opacity 0.3s;">
+                    @foreach (var row in paycheckRows)
+                    {
+                        <tr style="user-select: none;">
+                            <td>@row.Employee.Id</td>
+                            <td>@(string.IsNullOrEmpty(row.Employee.IesId) ? "-" : row.Employee.IesId)</td>
+                            <td style="color: var(--accent); font-weight: 500;">@row.Employee.Name</td>
+                            <td>@(row.Employee.Birthday == DateOnly.MinValue ? "-" : row.Employee.Age.ToString())</td>
+                            <td>@row.Employee.JobPosition</td>
+                            <td>₱@row.Employee.DailyWage.ToString("N2")</td>
+                            <td>
+                                @if (row.IsLoading)
+                                {
+                                    <span class="loading-dots">···</span>
+                                }
+                                else
+                                {
+                                    <span>@row.TotalHrs hrs @row.TotalMins mins</span>
+                                }
+                            </td>
+                            <td style="font-weight: 600;">
+                                @if (row.IsLoading)
+                                {
+                                    <span class="loading-dots">···</span>
+                                }
+                                else
+                                {
+                                    <span>₱@row.GrossPay.ToString("N2")</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@* ── Config Popup ────────────────────────────────────────────────────────── *@
+<IESapp.Components.Shared.PaycheckConfigPopup
+    @bind-IsVisible="showConfig"
+    OnSaved="OnConfigSaved" />
+
+@code {
+    // ── State ──────────────────────────────────────────────────────────────
+    private List<PaycheckRow> paycheckRows = new();
+    private bool isLoading  = true;
+    private bool isHidden   = true;   // hidden by default per spec
+    private bool showConfig = false;
+    private string errorMessage = "";
+
+    private DateTime dateFrom = DateTime.Today.AddDays(-7);
+    private DateTime dateTo   = DateTime.Today;
+
+    private decimal dailyWorkHrs = 8m;  // configurable; loaded from Preferences (supports decimals like 8.5)
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        AppState.OnEmployeesUpdated += ReLoad;
+        dailyWorkHrs = (decimal)Microsoft.Maui.Storage.Preferences.Default.Get("daily_work_hrs", 8f);
+        await LoadPaycheckData();
+    }
+
+    public void Dispose() => AppState.OnEmployeesUpdated -= ReLoad;
+
+    private async void ReLoad()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadPaycheckData();
+            StateHasChanged();
+        });
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────
+    private async Task LoadPaycheckData()
+    {
+        isLoading = true;
+        errorMessage = "";
+        StateHasChanged();
+
+
+        // Get EmployeesID from googlesheets -> Get work hours from Supabase -> Calculate gross pay
+        try
+        {
+            var employees = await SheetsService.GetEmployeesAsync();
+            var from = DateOnly.FromDateTime(dateFrom);
+            var to   = DateOnly.FromDateTime(dateTo);
+
+            paycheckRows = employees.Select(e => new PaycheckRow { Employee = e, IsLoading = true }).ToList();
+            isLoading = false;
+            StateHasChanged();
+
+            // Load work hours for each employee in parallel, update rows progressively
+            var tasks = paycheckRows.Select(async row =>
+            {
+                var (hrs, mins) = await SupabaseService.GetTotalWorkHrsAsync(row.Employee.Id, from, to);
+                row.TotalHrs    = hrs;
+                row.TotalMins   = mins;
+                row.GrossPay    = CalculateGrossPay(row.Employee.DailyWage, hrs, mins);
+                row.IsLoading   = false;
+                await InvokeAsync(StateHasChanged);
+            });
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            isLoading = false;
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Paycheck.LoadPaycheckData] {ex.Message}");
+        }
+        StateHasChanged();
+    }
+
+    // ── Gross Pay calculation ──────────────────────────────────────────────
+    /// <summary>
+    /// GrossPay = (DailyWage / daily_work_hrs_in_minutes) * total_work_minutes
+    /// </summary>
+    private decimal CalculateGrossPay(decimal dailyWage, int hrs, int mins)
+    {
+        if (dailyWorkHrs <= 0) return 0;
+        int     totalWorkMinutes  = hrs * 60 + mins;
+        decimal standardMinutes   = dailyWorkHrs * 60m;   // decimal so 8.5 hrs = 510 mins
+        return (dailyWage / standardMinutes) * totalWorkMinutes;
+    }
+
+    // ── Config saved callback ──────────────────────────────────────────────
+    private async Task OnConfigSaved(decimal newHrs)
+    {
+        dailyWorkHrs = newHrs;
+        // Recalculate gross pay for already-loaded rows (no need to re-query Supabase)
+        foreach (var row in paycheckRows.Where(r => !r.IsLoading))
+            row.GrossPay = CalculateGrossPay(row.Employee.DailyWage, row.TotalHrs, row.TotalMins);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ── Excel Export ───────────────────────────────────────────────────────
+    private bool isExporting = false;
+
+    private async Task ExportToExcelAsync()
+    {
+        isExporting = true;
+        StateHasChanged();
+        try
+        {
+            // Build workbook
+            using var wb = new XLWorkbook();
+            var ws = wb.Worksheets.Add("Paycheck");
+
+            // Header row — styled
+            var headers = new[] { "GUID", "IES_ID", "Name", "Age", "Job Position", "Daily Wage", "Total Work Hrs", "Gross Pay" };
+            for (int i = 0; i < headers.Length; i++)
+            {
+                var cell = ws.Cell(1, i + 1);
+                cell.Value = headers[i];
+                cell.Style.Font.Bold = true;
+                cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#4F46E5");
+                cell.Style.Font.FontColor = XLColor.White;
+                cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            }
+
+            // Data rows
+            int rowNum = 2;
+            var dateLabel = $"{DateOnly.FromDateTime(dateFrom):MM/dd/yyyy} – {DateOnly.FromDateTime(dateTo):MM/dd/yyyy}";
+            foreach (var row in paycheckRows.Where(r => !r.IsLoading))
+            {
+                ws.Cell(rowNum, 1).Value = row.Employee.Id;
+                ws.Cell(rowNum, 2).Value = string.IsNullOrEmpty(row.Employee.IesId) ? "-" : row.Employee.IesId;
+                ws.Cell(rowNum, 3).Value = row.Employee.Name;
+                ws.Cell(rowNum, 4).Value = row.Employee.Birthday == DateOnly.MinValue ? "-" : row.Employee.Age.ToString();
+                ws.Cell(rowNum, 5).Value = row.Employee.JobPosition;
+                ws.Cell(rowNum, 6).Value = (double)row.Employee.DailyWage;
+                ws.Cell(rowNum, 6).Style.NumberFormat.Format = "₱#,##0.00";
+                ws.Cell(rowNum, 7).Value = $"{row.TotalHrs}hrs {row.TotalMins}mins";
+                ws.Cell(rowNum, 8).Value = (double)row.GrossPay;
+                ws.Cell(rowNum, 8).Style.NumberFormat.Format = "₱#,##0.00";
+                // Alternating row shading
+                if (rowNum % 2 == 0)
+                    ws.Row(rowNum).Style.Fill.BackgroundColor = XLColor.FromHtml("#F3F4F6");
+                rowNum++;
+            }
+
+            // Auto-fit columns
+            ws.Columns().AdjustToContents();
+
+            // Add date range note in first empty row
+            int noteRow = rowNum + 1;
+            ws.Cell(noteRow, 1).Value = $"Date range: {dateLabel}  |  Daily Work Hrs: {dailyWorkHrs}";
+            ws.Cell(noteRow, 1).Style.Font.Italic = true;
+            ws.Cell(noteRow, 1).Style.Font.FontColor = XLColor.Gray;
+            ws.Range(noteRow, 1, noteRow, 7).Merge();
+
+            // Save to temp, then move via FilePicker-style SaveFilePickerAsync
+            var suggestedName = $"Paycheck_{DateOnly.FromDateTime(dateFrom):yyyy-MM-dd}_to_{DateOnly.FromDateTime(dateTo):yyyy-MM-dd}.xlsx";
+
+            // Save to user's Documents folder with a descriptive filename
+            var docsFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var savePath   = Path.Combine(docsFolder, suggestedName);
+            wb.SaveAs(savePath);
+
+            // Open the folder in Windows Explorer so user can find the file
+#if WINDOWS
+            System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{savePath}\"");
+#endif
+
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Export failed: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Paycheck.ExportToExcel] {ex.Message}");
+        }
+        finally
+        {
+            isExporting = false;
+            StateHasChanged();
+        }
+    }
+
+    // ── Row model ──────────────────────────────────────────────────────────
+    private class PaycheckRow
+    {
+        public IESapp.Models.Employee Employee { get; set; } = null!;
+        public bool    IsLoading { get; set; } = true;
+        public int     TotalHrs  { get; set; }
+        public int     TotalMins { get; set; }
+        public decimal GrossPay  { get; set; }
+    }
+}

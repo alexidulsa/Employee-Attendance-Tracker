@@ -1,0 +1,200 @@
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.AppState AppState
+@inject IESapp.Services.SupabaseService SupabaseService
+
+@if (IsVisible && Employee != null)
+{
+    <div class="popup-overlay" @onclick="Close">
+        <div class="popup-content" @onclick:stopPropagation="true">
+            <div class="popup-header">
+                <h3>Edit Employee</h3>
+                <button class="close-btn" @onclick="Close">×</button>
+            </div>
+
+            <div class="popup-body">
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">GUID</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" value="@editEmployee.Id" disabled />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">IES ID</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" @bind="editEmployee.IesId" />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Name</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" @bind="editEmployee.Name" />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Birthday</label>
+                    <div class="col-sm-8">
+                        <input type="date" class="form-control" @bind="birthdayInput"
+                               max="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                        @if (editEmployee.Birthday != DateOnly.MinValue)
+                        {
+                            <small class="text-muted">Age: @editEmployee.Age years old</small>
+                        }
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Sex</label>
+                    <div class="col-sm-8">
+                        <select class="form-control" @bind="editEmployee.Sex">
+                            <option value="">Select Gender</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Job Position</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" @bind="editEmployee.JobPosition" />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Daily Wage</label>
+                    <div class="col-sm-8">
+                        <input type="number" class="form-control" @bind="editEmployee.DailyWage" />
+                    </div>
+                </div>
+
+                <div class="form-group row">
+                    <label class="col-sm-4 col-form-label">Address</label>
+                    <div class="col-sm-8">
+                        <input type="text" class="form-control" @bind="editEmployee.Address" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="popup-footer">
+                
+                @if (string.IsNullOrEmpty(errorMessage))
+                    {
+                        <p class="description-text">
+                            Edit employee details. Name and Job Position must contain letters only.
+                        </p>
+                    } else {
+
+                    }
+                <div class="footer-actions">
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <div class="error-message" style="color: red; font-size: 0.87rem; margin-right: 10px;">⚠️ @errorMessage</div>
+                    }
+                    <div class="action-buttons" style="white-space: nowrap;">
+                        <button class="add-emp-btn" @onclick="SaveEdit" disabled="@isSaving">
+                            @(isSaving ? "Saving..." : "Save Changes")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsVisible { get; set; }
+    [Parameter] public EventCallback<bool> IsVisibleChanged { get; set; }
+    [Parameter] public IESapp.Models.Employee? Employee { get; set; }
+    [Parameter] public EventCallback OnEmployeeUpdated { get; set; }
+
+    private IESapp.Models.Employee editEmployee = new();
+    private string? errorMessage;
+    private bool isSaving = false;
+    private bool _wasVisible = false;
+
+    private DateTime? birthdayInput
+    {
+        get => editEmployee.Birthday == DateOnly.MinValue
+            ? null : editEmployee.Birthday.ToDateTime(TimeOnly.MinValue);
+        set => editEmployee.Birthday = value.HasValue
+            ? DateOnly.FromDateTime(value.Value) : DateOnly.MinValue;
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Re-clone employee data every time the popup transitions from closed → open
+        bool justOpened = IsVisible && !_wasVisible;
+        _wasVisible = IsVisible;
+
+        if (justOpened && Employee != null)
+        {
+            editEmployee = new IESapp.Models.Employee
+            {
+                Id          = Employee.Id,
+                IesId       = Employee.IesId,
+                Name        = Employee.Name,
+                Birthday    = Employee.Birthday,
+                Sex         = Employee.Sex,
+                Address     = Employee.Address,
+                JobPosition = Employee.JobPosition,
+                DailyWage   = Employee.DailyWage
+            };
+            errorMessage = null;
+        }
+    }
+
+    private async Task Close()
+    {
+        IsVisible = false;
+        await IsVisibleChanged.InvokeAsync(false);
+        errorMessage = null;
+    }
+
+    private bool IsValidText(string v) =>
+        System.Text.RegularExpressions.Regex.IsMatch(v.Trim(), @"^[a-zA-Z0-9\s.,\-]+$");
+
+    private async Task SaveEdit()
+    {
+        if (string.IsNullOrWhiteSpace(editEmployee.Name) || string.IsNullOrWhiteSpace(editEmployee.JobPosition))
+        {
+            errorMessage = "Name and Job Position cannot be empty.";
+            return;
+        }
+        if (!IsValidText(editEmployee.Name))
+        {
+            errorMessage = "Name must contain letters and numbers only (no special characters).";
+            return;
+        }
+        if (!IsValidText(editEmployee.JobPosition))
+        {
+            errorMessage = "Job Position must contain letters and numbers only (no special characters).";
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(editEmployee.Address) && !IsValidText(editEmployee.Address))
+        {
+            errorMessage = "Address must contain letters and numbers only (no special characters).";
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            await SheetsService.UpdateEmployeeAsync(editEmployee, SupabaseService);
+            await OnEmployeeUpdated.InvokeAsync();
+            AppState.NotifyEmployeesUpdated();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[EditEmployeePopup.SaveEdit] {ex.Message}");
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}

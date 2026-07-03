@@ -1,0 +1,42 @@
+﻿@inherits LayoutComponentBase
+@inject IESapp.Services.AppState AppState
+
+@if (!AppState.IsLoggedIn)
+{
+    <IESapp.Components.Pages.Login />
+}
+else
+{
+    <div class="page">
+        <div class="sidebar">
+            <NavMenu />
+        </div>
+
+        <main>
+            <div class="top-row px-4 text-white" style="background-color: #2b3990;">
+                <IESapp.Components.Layout.Header />
+            </div>
+
+            <article class="content px-4">
+                @Body
+            </article>
+        </main>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        AppState.OnChange += StateHasChanged;
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= StateHasChanged;
+    }
+
+    private void Logout()
+    {
+        AppState.Logout();
+    }
+}

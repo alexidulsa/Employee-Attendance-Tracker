@@ -1,0 +1,257 @@
+@implements IDisposable
+@inject IESapp.Services.GoogleSheetsService SheetsService
+@inject IESapp.Services.AppState AppState
+@inject IESapp.Services.SupabaseService SupabaseService
+
+<header class="app-header">
+    <div class="header-left">
+        <h2>IES Employee Time Tracker</h2>
+    </div>
+
+    <div class="header-right">
+        @if (isLoading)
+        {
+            <span class="loading-text">Loading employees...</span>
+        }
+        else
+        {
+            <div class="log-time-controls">
+                <select class="employee-dropdown" @onchange="OnEmployeeSelected">
+                    <option value="">-- Select Employee --</option>
+                    @foreach (var emp in employees)
+                    {
+                        <option value="@emp.Id">@emp.Name</option>
+                    }
+                </select>
+
+                <input type="time" @bind="inputTime" class="time-input" />
+
+                @if (!string.IsNullOrEmpty(selectedEmployeeId))
+                {
+                    <button class="log-time-btn @GetButtonClass()" @onclick="LogTime">
+                        @GetButtonText()
+                    </button>
+                    @if (errorMessage != null)
+                    {
+                        <span class="error-msg">@errorMessage</span>
+                    }
+                }
+                else
+                {
+                    <button class="log-time-btn log-idle" disabled title="Select employee first">Log Time</button>
+                }
+            </div>
+        }
+    </div>
+    <div class="user-profile">
+        <div class="avatar">@AppState.CurrentUserEmail.FirstOrDefault()</div>
+        <span class="email-text">@AppState.CurrentUserEmail</span>
+        <button class="logout-btn" title="Logout" @onclick="AppState.Logout">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+        </button>
+    </div>
+</header>
+
+@* ── Invalid Time-Out Popup ─────────────────────────────────────────────── *@
+@if (showInvalidTimePopup)
+{
+    <div class="popup-overlay" @onclick="() => showInvalidTimePopup = false">
+        <div class="popup-content" @onclick:stopPropagation="true" style="max-width:360px; text-align:center;">
+            <div class="popup-header" style="background:#dc3545; color:white;">
+                <h5 style="margin:0; color: black;">⚠️ Invalid Time-Out</h5>
+                <button class="btn-close-custom" @onclick="() => showInvalidTimePopup = false">✕</button>
+            </div>
+            <div class="popup-body" style="padding:1.5rem; color: black;">
+                <p style="font-size:0.95rem; margin:0;">
+                    Time-Out (@inputTime.ToString("hh:mm tt")) must be <strong>later</strong> than <br/>
+                    Time-In (@invalidTimeInDisplay).<br/><br/>
+                    Please select a correct time and try again.
+                </p>
+            </div>
+            <div class="popup-footer" style="justify-content:center;">
+                <button class="btn btn-danger" @onclick="() => showInvalidTimePopup = false">OK</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<IESapp.Models.Employee> employees = new();
+    private bool showInvalidTimePopup = false;
+    private string invalidTimeInDisplay = "";
+
+    private List<IESapp.Models.TimeLog> timeLogs = new();
+    private bool isLoading = true;
+
+    private string selectedEmployeeId = "";
+    private TimeOnly inputTime = TimeOnly.FromDateTime(DateTime.Now);
+    private string? errorMessage = null;
+    private System.Threading.Timer? _clockTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AppState.OnEmployeesUpdated += ReLoadData;
+        await LoadData();
+
+        // Tick every 15 seconds to keep the time input current
+        _clockTimer = new System.Threading.Timer(_ =>
+        {
+            InvokeAsync(() =>
+    {
+    if (string.IsNullOrEmpty(selectedEmployeeId))
+        inputTime = TimeOnly.FromDateTime(DateTime.Now);
+    StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async void ReLoadData()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadData();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        AppState.OnEmployeesUpdated -= ReLoadData;
+        _clockTimer?.Dispose();
+    }
+
+    private async Task LoadData()
+    {
+        isLoading = true;
+        try
+        {
+            employees = await SheetsService.GetEmployeesAsync();
+            timeLogs = await SheetsService.GetTimeLogsAsync();
+        }
+        catch
+        {
+            // Soft fail, let the main page show the error banner
+        }
+        finally
+        {
+            inputTime = TimeOnly.FromDateTime(DateTime.Now);
+            isLoading = false;
+        }
+    }
+
+    private void OnEmployeeSelected(ChangeEventArgs e)
+    {
+        selectedEmployeeId = e.Value?.ToString() ?? "";
+        errorMessage = null;
+    }
+
+    // Determine if employee already timed in today
+    private IESapp.Models.TimeLog? GetCurrentLog()
+    {
+        if (string.IsNullOrEmpty(selectedEmployeeId)) return null;
+
+        // In a real app we'd filter by Date. For prototype, we just look for "On Duty" status for this employee
+        return timeLogs.FirstOrDefault(l => l.EmployeeId == selectedEmployeeId && l.Status == "On Duty");
+    }
+
+    private string GetButtonText()
+    {
+        var currentLog = GetCurrentLog();
+        if (currentLog != null) return "Time Out";
+        return "Time In";
+    }
+
+    private string GetButtonClass()
+    {
+        var currentLog = GetCurrentLog();
+        if (currentLog != null) return "log-out-btn";
+        return "log-in-btn";
+    }
+
+    private async Task LogTime()
+    {
+        var timeString = inputTime.ToString("HH:mm");
+
+        var employee = employees.FirstOrDefault(e => e.Id == selectedEmployeeId);
+        if (employee == null) return;
+
+        isLoading = true;
+        errorMessage = null;
+
+        try
+        {
+            var currentLog = GetCurrentLog();
+            if (currentLog != null)
+            {
+                // Time-Out Flow
+                // ── Safeguard: time-out must be > time-in ──────────────────
+                if (TimeSpan.TryParse(currentLog.TimeIn, out TimeSpan tInCheck) &&
+                    inputTime.ToTimeSpan() <= tInCheck)
+                {
+                    // Parse for display (convert "HH:mm" → 12-hr format)
+                    if (TimeSpan.TryParse(currentLog.TimeIn, out TimeSpan tDisp))
+                    {
+                        var dtDisp = DateTime.Today.Add(tDisp);
+                        invalidTimeInDisplay = dtDisp.ToString("hh:mm tt");
+                    }
+                    else
+                    {
+                        invalidTimeInDisplay = currentLog.TimeIn;
+                    }
+                    showInvalidTimePopup = true;
+                    isLoading = false;
+                    return;
+                }
+
+                currentLog.TimeOut = timeString;
+                currentLog.Status = "Shift Done";
+
+                // Calculate Total Hrs (basic 24 hr calculation)
+                if (TimeSpan.TryParse(currentLog.TimeIn, out TimeSpan tIn) && TimeSpan.TryParse(currentLog.TimeOut, out TimeSpan tOut))
+                {
+                    var diff = tOut - tIn;
+                    // handle after midnight shift
+                    if (diff.TotalHours < 0) diff = diff.Add(TimeSpan.FromHours(24));
+                    currentLog.TotalHrs = diff.ToString(@"hh\:mm");
+                }
+
+                await SheetsService.UpdateTimeOutAsync(currentLog);
+                // Mirror to Supabase — no total_hrs in Supabase time_logs
+                _ = SupabaseService.UpdateTimeOutInSupabaseAsync(currentLog);
+            }
+            else
+            {
+                // Time-In Flow
+                var newLog = new IESapp.Models.TimeLog
+                    {
+                        EmployeeId = employee.Id,
+                        Name = employee.Name,
+                        TimeIn = timeString,
+                        Status = "On Duty",
+                        Date = DateTime.Now.ToString("MM/dd/yyyy")
+                    };
+                await SheetsService.AddTimeInAsync(newLog);
+                // Mirror to Supabase
+                _ = SupabaseService.LogTimeEntryAsync(newLog);
+            }
+
+            // Reload to reflect state, then reset dropdown
+            await LoadData();
+            selectedEmployeeId = "";
+            AppState.NotifyTimeLogsUpdated();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+            _ = SheetsService.AppendErrorLogAsync(AppState.SessionId, $"[Header.LogTime] {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+}
